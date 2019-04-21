@@ -7,6 +7,7 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.support.v4.app.ActivityCompat;
+import android.util.Pair;
 import android.view.View;
 import android.support.v7.app.AppCompatActivity;
 import java.io.File;
@@ -14,6 +15,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.text.DecimalFormat;
+import java.util.LinkedList;
+import java.util.Queue;
+
 import android.app.Activity;
 import android.content.Context;
 import android.hardware.Sensor;
@@ -48,12 +52,15 @@ public class MainActivity extends Activity implements SensorEventListener,
     private float FILTERING_VALAUE = 0.1f;
     private TextView AT,ACT,PG,BIST,OST, PS, ST;
     private SeekBar SKB;
-    private int built_in_step = 0;
+    private int built_in_step = 0, init_cnt = 0;
     private GraphView graph;
     private LineGraphSeries<DataPoint> series;
     private int timeStamp = 0;
     private LocationManager lm;
     private Location location_now;
+    private Queue<Location> location_prev_30sec = new LinkedList<Location>();
+    private Queue<Long> step_queue_prev_30sec = new LinkedList<Long>();
+
     //        // 创建SQLiteOpenHelper子类对象
 //  private MySQLiteOpenHelper dbHelper = new MySQLiteOpenHelper(this,"test_carson");
 //        //数据库实际上是没有被创建或者打开的，直到getWritableDatabase() 或者 getReadableDatabase() 方法中的一个被调用时才会进行创建或者打开
@@ -81,7 +88,9 @@ public class MainActivity extends Activity implements SensorEventListener,
             public void onLocationChanged(Location location) {
                 // 当GPS定位信息发生改变时，更新定位
                 location_now = location;
+                location_prev_30sec.add(location_now);
                 updateShow();
+
             }
 
             @Override
@@ -188,8 +197,11 @@ public class MainActivity extends Activity implements SensorEventListener,
         ACT.setText(String.format("AccuracyChanged: accuracy: %d", accuracy));
     }
     public void onSensorChanged(SensorEvent event) {
-        String message = new String();
+//        String message = new String();
         String message_2 = new String();
+        currentTime = System.currentTimeMillis();
+        if (lastTimeCheck == 0)
+            lastTimeCheck = currentTime;
         if(event.sensor.getType() == Sensor.TYPE_LINEAR_ACCELERATION) {
             float X = event.values[0];
             float Y = event.values[1];
@@ -197,7 +209,7 @@ public class MainActivity extends Activity implements SensorEventListener,
             float A = (float) Math.sqrt(X*X + Y*Y + Z*Z);
 
             if (timeStamp++ % 100 == 0)
-                series.appendData(new DataPoint(timeStamp, A), true, 50, false);
+                series.appendData(new DataPoint(timeStamp, A), false, 100, false);
 /*
             //Low-Pass Filter
             lowX = X * FILTERING_VALAUE + lowX * (1.0f -
@@ -238,10 +250,21 @@ public class MainActivity extends Activity implements SensorEventListener,
             }
 
             show_loop = (show_loop+1)%200;
+
+            message_2 += df.format(location_now.getLongitude()) + " ";
+            message_2 += df.format(location_now.getLatitude());
+
             if (doWrite) {
 //                write2file(message+"\n", String.format("/sdcard/acc_preprocess_%.2f.txt",FILTERING_VALAUE));
                 write2file(message_2+"\n", String.format("/sdcard/acc_raw_%.2f.txt",FILTERING_VALAUE));
             }
+
+            if (currentTime-lastTimeCheck >= 1000)
+            {
+                judgeState();
+                lastTimeCheck = currentTime;
+            }
+
         }
         if(event.sensor.getType() == Sensor.TYPE_STEP_DETECTOR)
         {
@@ -250,13 +273,28 @@ public class MainActivity extends Activity implements SensorEventListener,
         }
 
     }
+    private void judgeState()
+    {
+        while (!step_queue_prev_30sec.isEmpty()
+                && currentTime - step_queue_prev_30sec.element() > 15000)
+            step_queue_prev_30sec.remove();
+        while (location_prev_30sec.size()>=30)
+            location_prev_30sec.remove();
+//        System.out.println(step_queue_prev_30sec.size());
+        if((!location_prev_30sec.isEmpty() && location_prev_30sec.element().distanceTo(location_now)<30)
+                || step_queue_prev_30sec.size()<7)
+            ST.setText("State: Rest 😀");
+        else
+            ST.setText("State: Moving 🙃");
+    }
+
     private float accOld = 0, accNew = 0, peak = 0, valley = 0;
     private boolean lastStatus = false, isUp = false;
     private int Upcount = 0, Upcount_prev= 0, tmpcount = 0;
     final private int valueNum = 4;
     float[] tmpVal = new float[valueNum];
     private int pretend_step=0, count_step = 0;
-    private long currentTime, lastTimePeak=0, lastTime=0,thisTimePeak = 0,
+    private long currentTime=0, lastTimePeak=0, lastTimeCheck=0,thisTimePeak = 0,
 
             LastTimeValley = 0, timeInterval = 400, stopInterval = 10000; // 0.3s
     private float threshold = 1.5f, initialgap = 1.0f;
@@ -275,6 +313,7 @@ public class MainActivity extends Activity implements SensorEventListener,
                     if (peak - valley >= threshold) {
                         thisTimePeak = currentTime;
                         count_step++;
+                        step_queue_prev_30sec.add(currentTime);
                     }
                     if (peak - valley >= initialgap)
                     {
